@@ -1,0 +1,72 @@
+name: Build Android APK (Lite)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-numpy
+          python3 -c "import numpy; print(numpy.__version__)"
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+
+      - name: Install Bazelisk
+        run: |
+          curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.17.0/bazelisk-linux-amd64 -o bazelisk
+          sudo install -m 0755 bazelisk /usr/local/bin/bazelisk
+          bazelisk version
+
+      - name: Set up Android SDK + NDK r21e
+        run: |
+          unset ANDROID_HOME ANDROID_NDK_HOME
+          bash ./setup_android_sdk_and_ndk.sh "$HOME/Android/Sdk" "$HOME/Android/Ndk" r21e --accept-licenses
+          echo "ANDROID_HOME=$HOME/Android/Sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$HOME/Android/Ndk/android-ndk-r21e" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        run: |
+          for i in 1 2; do
+            bazelisk --host_jvm_args=-Xmx2g build \
+              --config=android_arm64 \
+              --compilation_mode=fastbuild \
+              --spawn_strategy=local \
+              --jobs=3 \
+              --local_cpu_resources=3 \
+              --local_ram_resources=6144 \
+              //project_guideline/android:guideline_app && break
+            if [ "$i" = "2" ]; then
+              exit 1
+            fi
+            sleep 20
+          done
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp -L bazel-bin/project_guideline/android/guideline_app.apk dist/project-guideline.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-guideline-apk
+          path: dist/project-guideline.apk
+          if-no-files-found: error
